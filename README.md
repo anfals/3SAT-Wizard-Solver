@@ -11,4 +11,5 @@ strategies like greedy approximation and simulated annealing, which are explored
 Refer to the "Project Write Up" PDF for a full breakdown of the reduction to 3SAT and the usage of a greedy approximator for input
 files that are too large to be completed using a standard 3SAT solver without the use of powerful computing resources.
 
-There are also other branches.
+Also, the "annealing" and "backtracker" branches offer implementations of the solver that try different approximation approaches. Both were ultimately rejected for not being accurate enough/fast enough, but provide reference for implementations of two well-known approaches to NP-Complete problems.
+
