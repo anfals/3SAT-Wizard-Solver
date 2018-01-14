@@ -2,11 +2,18 @@ import argparse
 import pycosat
 import itertools
 import sys
-import random
 import networkx as nx
+import queue
+import random
+
+"""
+======================================================================
+  Complete the following function.
+======================================================================
+"""
 
 
-def solve(num_wizards, num_constraints, wizards, constraints, output_file):
+def solve(num_wizards, num_constraints, wizards, constraints):
     """
     Write your algorithm here.
     Input:
@@ -19,183 +26,69 @@ def solve(num_wizards, num_constraints, wizards, constraints, output_file):
     Output:
         An array of wizard names in the ordering your algorithm returns
     """
-    if num_wizards < 200:
-        opt_ordering = sat_reduction(wizards, constraints)
-    else:
-        opt_ordering_map = greedy_solver(wizards, constraints, output_file)
-        # as the opt_ordering_map is a dict of (name : position), we need to convert it to an ordered list
-        rev_dict = {}
-        for key in opt_ordering_map:
-            rev_dict[opt_ordering_map[key]] = key
-        opt_ordering = []
-        for i in range(num_wizards):
-            opt_ordering.append(rev_dict[i])
-        return opt_ordering
+    opt_ordering, failed_constraints = backtrack(wizards, constraints)
+
+    if failed_constraints > 0 or len(opt_ordering) != num_wizards:
+        print("Something went wrong")
     return opt_ordering
 
-
-def sat_reduction(wizards_list, constraints):
-    # all the clauses for SAT
-    cnf = []
-
-    # maps inequality to var used in SAT (note clark < bruce is represented as (clark, bruce); variables are 1, 2, etc.)
-    inequality_to_var = {}
-
-    # same map except reversed
-    var_to_inequality = {}
-
-    # create the clauses from the constraints
-    for constraint in constraints:
-        wizard1, wizard2, wizard3 = constraint[0], constraint[1], constraint[2]
-        if wizard1 == wizard2 or wizard2 == wizard3 or wizard1 == wizard3:
-            continue
-
-        # clause 1: NOT (wizard1 < wizard3) or NOT (wizard3 < wizard2)
-        var1 = get_or_make_var(wizard1, wizard3, inequality_to_var, var_to_inequality)
-        var2 = get_or_make_var(wizard3, wizard2, inequality_to_var, var_to_inequality)
-        cnf.append([-var1, -var2])
-
-        # clause 2: NOT (wizard2 < wizard3) or NOT (wizard3 < wizard1)
-        var3 = get_or_make_var(wizard2, wizard3, inequality_to_var, var_to_inequality)
-        var4 = get_or_make_var(wizard3, wizard1, inequality_to_var, var_to_inequality)
-        cnf.append([-var3, -var4])
-
-    # create the transitivity clauses
-    for perm in itertools.permutations(wizards_list, 3):
-        # NOT (wizard1 < wizard2) or NOT (wizard2 < wizard3) or (wizard1 < wizard3)
-        wizard1, wizard2, wizard3 = perm[0], perm[1], perm[2]
-        var1 = get_or_make_var(wizard1, wizard2, inequality_to_var, var_to_inequality)
-        var2 = get_or_make_var(wizard2, wizard3, inequality_to_var, var_to_inequality)
-        var3 = get_or_make_var(wizard1, wizard3, inequality_to_var, var_to_inequality)
-        cnf.append([-var1, -var2, var3])
-
-    # solve the SAT
-    solution = pycosat.solve(cnf)
-
-    # make the directed graph
+def backtrack(wizards, constraints):
+    # Solver that makes use of backtracking, instead of 3SAt
+    # start with a directed graph with no edges between the nodes
     DG = nx.DiGraph()
-    DG.add_nodes_from(wizards_list)
+    DG.add_nodes_from(wizards)
 
-    # use the solution to SAT to figure out the graph edges
-    for var in solution:
-        if var < 0:
-            # the inequality is false, so the reverse statement is true, so add edge w2 -> w1
-            inequality = var_to_inequality[-var]
-            DG.add_edge(inequality[1], inequality[0])
-        else:
-            # the inequality is true, so add edge from w1 -> w2
-            inequality = var_to_inequality[var]
-            DG.add_edge(inequality[0], inequality[1])
-    # topological sort
+    cur_number = 1
+
+    # the priority queue, where entries are of the form (priority, (randomint, cur_constraint, graph))
+    pq = queue.PriorityQueue()
+    pq.put((len(constraints), (cur_number, 0, DG)))
+    cur_number += 1
+    while not pq.empty():
+        # remove the item from the queue
+        priority, tup = pq.get()
+        nonsense, cur_constraint_num, cur_DG = tup
+        cur_constraint = constraints[cur_constraint_num]
+        # create two new graphs
+        DG_less = nx.DiGraph(cur_DG)
+        DG_greater = nx.DiGraph(cur_DG)
+
+        # add an edge from wizard0, wizard1 to wizard3, as wizard3 is greater
+        DG_less.add_edge(cur_constraint[0], cur_constraint[2])
+        DG_less.add_edge(cur_constraint[1], cur_constraint[2])
+
+        # add an edge from wizard3 to wizard, wizard2, as they are both greater
+        DG_greater.add_edge(cur_constraint[2], cur_constraint[0])
+        DG_greater.add_edge(cur_constraint[2], cur_constraint[1])
+
+        if nx.is_directed_acyclic_graph(DG_less):
+            new_priority = priority - 1
+            new_constraint_num = cur_constraint_num + 1
+            if new_constraint_num == len(constraints):
+                return topsort(DG_less, constraints)
+            item = (new_priority, (cur_number, new_constraint_num, DG_less))
+            cur_number += 1
+            pq.put(item)
+        if nx.is_directed_acyclic_graph(DG_greater):
+            new_priority = priority - 1
+            new_constraint_num = cur_constraint_num + 1
+            if new_constraint_num == len(constraints):
+                return topsort(DG_greater, constraints)
+            item = (new_priority, (cur_number, new_constraint_num, DG_greater))
+            cur_number += 1
+            pq.put(item)
+
+
+def topsort(DG, constraints):
     top_sort = nx.topological_sort(DG)
     opt_ordering = []
     for wizard in top_sort:
         opt_ordering.append(wizard)
-    return opt_ordering
+    return opt_ordering, constraints_unsatisfied(opt_ordering, constraints)
 
 
-def get_or_make_var(wizard1, wizard2, inequality_to_var, var_to_inequality):
-    """
-    Given wizard1, wizard which form the inequality wizard1 < wizard2, checks to see if there is a variable
-    already mapped to this inequality or wizard2 < wizard1. If not, makes one
-    :param wizard1:
-    :param wizard2:
-    :param inequality_to_var:
-    :param var_to_inequality:
-    :return: the variable number
-    """
-    cur_inequality = (wizard1, wizard2)
-    rev_inequality = (wizard2, wizard1)
-    if cur_inequality in inequality_to_var:
-        # the mapping already exists
-        return inequality_to_var[cur_inequality]
-    elif rev_inequality in inequality_to_var:
-        # the reverse mapping exists, so return the negation of the inequality
-        return -1 * inequality_to_var[rev_inequality]
-    else:
-        # the mapping doesn't exist, so make a new variable, which is 1 greater than the max number used so far
-        if len(var_to_inequality) == 0:
-            new_var = 1
-        else:
-            new_var = max(var_to_inequality) + 1
-        inequality_to_var[cur_inequality] = new_var
-        var_to_inequality[new_var] = cur_inequality
-        return new_var
-
-
-def greedy_solver(wizards_list, constraints, output_name):
-    # generate a list of all possible swaps, i.e. pairs of indices
-    possible_swaps = list(itertools.combinations([a for a in range(num_wizards)], 2))
-    # randomly shuffle list
-    random.shuffle(wizards_list)
-    # convert wizard list to map using positions in random shuffling order
-    node_map = {k: v for v, k in enumerate(wizards_list)}
-    # baseline number of failed constraints
-    failures = constraints_unsatisfied_map(node_map, constraints)
-    seen_failures_map = {}
-    best_map_ever_seen = node_map
-    best_failures = len(constraints)
-    try:
-        while failures > 0:
-            rev_dict = {}
-            for key in node_map:
-                rev_dict[node_map[key]] = key
-            best_map = node_map
-            for i in possible_swaps:
-                # for each swap, we make the swap and determine if this new ordering results in the fewest failures
-                swap_a = rev_dict[i[0]]
-                swap_b = rev_dict[i[1]]
-                cur_map = dict(node_map)
-                cur_map[swap_a], cur_map[swap_b] = cur_map[swap_b], cur_map[swap_a]
-                cur_fail = constraints_unsatisfied_map(cur_map, constraints)
-                if cur_fail < failures:
-                    failures = cur_fail
-                    best_map = cur_map
-            node_map = best_map
-            if failures < best_failures:
-                # keep track of the best ever seen ordering in case of early termination
-                best_map_ever_seen = dict(node_map)
-                best_failures = failures
-            if failures in seen_failures_map:
-                seen_failures_map[failures] += 1
-                # if we have seen this particular number of failures repeatedly, we are stuck in a local minimum
-                if seen_failures_map[failures] > 3:
-                    fail_perc = (failures * 1.0) / len(constraints)
-                    if fail_perc > 0.15:
-                        # if more than 15% of the constraints remain unsatisfied, choose a random number of swaps
-                        num_random_swaps = random.randint(5, 25)
-                    else:
-                        # if <= 15% of the constraints remain unsatisfied, just give up
-                        return node_map
-                    for i in range(num_random_swaps):
-                        # make the random number of swaps to get out of the local minimum
-                        rev_dict = {}
-                        for key in node_map:
-                            rev_dict[node_map[key]] = key
-                        swap = random.randint(0, len(possible_swaps) - 1)
-                        swap = possible_swaps[swap]
-                        swap_a = rev_dict[swap[0]]
-                        swap_b = rev_dict[swap[1]]
-                        node_map[swap_a], node_map[swap_b] = node_map[swap_b], node_map[swap_a]
-                        failures = constraints_unsatisfied_map(node_map, constraints)
-                    seen_failures_map = {}
-
-            else:
-                seen_failures_map[failures] = 1
-        return node_map
-    except KeyboardInterrupt:
-        # if the approximation is taking too long to get below 15%, just write the best known ordering to file
-        rev_dict = {}
-        for key in best_map_ever_seen:
-            rev_dict[best_map_ever_seen[key]] = key
-        lst = []
-        for i in range(num_wizards):
-            lst.append(rev_dict[i])
-        write_output(output_name, lst)
-        sys.exit(0)
-
-
-def constraints_unsatisfied_map(node_map, constraints):
+def constraints_unsatisfied(ordering, constraints):
+    node_map = {k: v for v, k in enumerate(ordering)}
     num_failed = 0
     for constraint in constraints:
         wiz_a = node_map[constraint[0]]
@@ -242,5 +135,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     num_wizards, num_constraints, wizards, constraints = read_input(args.input_file)
-    solution = solve(num_wizards, num_constraints, wizards, constraints, args.output_file)
+    solution = solve(num_wizards, num_constraints, wizards, constraints)
     write_output(args.output_file, solution)
+
+
+
