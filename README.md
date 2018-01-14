@@ -9,4 +9,6 @@ to another well known NP-Complete Problem, 3SAT. We can also cope with the NP-Co
 strategies like greedy approximation and simulated annealing, which are explored in my implementation of the "Solver."
 
 Refer to the "Project Write Up" PDF for a full breakdown of the reduction to 3SAT and the usage of a greedy approximator for input
-files that are too large to be completed using a standard 3SAT solver without the use of powerful computing resources.  
+files that are too large to be completed using a standard 3SAT solver without the use of powerful computing resources.
+
+There are also other branches.
